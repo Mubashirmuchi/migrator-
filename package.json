@@ -1,0 +1,20 @@
+{
+  "name": "mazerati",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "seed": "node scripts/seed.js",
+    "setup-target": "node scripts/setup-target.js",
+    "migrate": "node index.js config/client1.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cli-progress": "^3.12.0",
+    "fs": "^0.0.1-security",
+    "mysql2": "^3.20.0"
+  }
+}

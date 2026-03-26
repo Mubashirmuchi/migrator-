@@ -1,0 +1,22 @@
+{
+  "source": {
+    "host": "localhost",
+    "port": 3307,
+    "user": "root",
+    "password": "root",
+    "database": "employees"
+  },
+  "target": {
+    "host": "localhost",
+    "port": 3308,
+    "user": "root",
+    "password": "root",
+    "database": "destination"
+  },
+
+  "query": "SELECT * FROM emp_view WHERE emp_no BETWEEN ? AND ?",
+  "targetTable": "final_table",
+  "batchSize": 50,
+  "idColumn": "emp_no",
+  "workers": 4
+}
