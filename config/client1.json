@@ -15,6 +15,7 @@
   },
 
   "query": "SELECT * FROM emp_view WHERE emp_no BETWEEN ? AND ?",
+  "sourceTable": "employees",
   "targetTable": "final_table",
   "batchSize": 50,
   "idColumn": "emp_no",

@@ -6,7 +6,12 @@
   "scripts": {
     "seed": "node scripts/seed.js",
     "setup-target": "node scripts/setup-target.js",
-    "migrate": "node index.js config/client1.json"
+    "migrate": "node index.js config/client1.json",
+    "seed:mssql": "node scripts/seed-mssql.js",
+    "setup-target:mssql": "node scripts/setup-target-mssql.js",
+    "migrate:mssql": "node index.js config/client2.json",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +20,7 @@
   "dependencies": {
     "cli-progress": "^3.12.0",
     "fs": "^0.0.1-security",
+    "mssql": "^12.2.1",
     "mysql2": "^3.20.0"
   }
 }

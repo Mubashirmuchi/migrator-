@@ -1,192 +1,72 @@
-// const fs = require("fs");
-// const { createConnection } = require("./db");
-// const { transform } = require("./transformer");
-// const { log, error } = require("../utils/logger");
-
-// async function migrate(config) {
-//   const source = createConnection(config.source);
-//   const target = createConnection(config.target);
-
-//   let lastId = loadProgress();
-
-//   log(`Starting from ID: ${lastId}`);
-
-//   const query = source.query(config.query, [lastId]);
-
-//   const BATCH_SIZE = config.batchSize || 1000;
-//   let batch = [];
-//   let count = 0;
-
-//   query
-//     .stream()
-//     .on("data", (row) => {
-//       const transformed = transform(row);
-
-//       batch.push(Object.values(transformed));
-//       lastId = row[config.idColumn];
-
-//       if (batch.length >= BATCH_SIZE) {
-//         query.pause();
-//         insertBatch(target, config.targetTable, batch, () => {
-//           saveProgress(lastId);
-//           count += batch.length;
-//           log(`Inserted: ${count}`);
-//           batch = [];
-//           query.resume();
-//         });
-//       }
-//     })
-//     .on("end", () => {
-//       if (batch.length > 0) {
-//         insertBatch(target, config.targetTable, batch, () => {
-//           saveProgress(lastId);
-//           log("✅ Migration completed");
-//         });
-//       } else {
-//         log("✅ Migration completed");
-//       }
-//     })
-//     .on("error", (err) => {
-//       error(err.message);
-//     });
-// }
-
-// function insertBatch(conn, table, rows, callback) {
-//   if (rows.length === 0) return callback();
-
-//   const sql = `INSERT INTO ${table} VALUES ?`;
-
-//   conn.query(sql, [rows], (err) => {
-//     if (err) {
-//       error("Insert failed: " + err.message);
-//     }
-//     callback();
-//   });
-// }
-
-// function loadProgress() {
-//   if (!fs.existsSync("progress.json")) return 0;
-//   const data = JSON.parse(fs.readFileSync("progress.json"));
-//   return data.lastId || 0;
-// }
-
-// function saveProgress(lastId) {
-//   fs.writeFileSync("progress.json", JSON.stringify({ lastId }));
-// }
-
-// module.exports = { migrate };
-
 const fs = require("fs");
 const cliProgress = require("cli-progress");
 const { createConnection } = require("./db");
 const { transform } = require("./transformer");
 const { log, error } = require("../utils/logger");
 
-const PROGRESS_FILE = "progress.json";
-
-function loadProgress() {
-  if (!fs.existsSync(PROGRESS_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(PROGRESS_FILE)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveProgress(data) {
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
-}
-
-async function getMinMax(source, table, idColumn) {
-  return new Promise((resolve, reject) => {
-    source.query(
-      `SELECT MIN(${idColumn}) as min, MAX(${idColumn}) as max FROM ${table}`,
-      (err, res) => {
-        if (err) return reject(err);
-        resolve(res[0]);
-      },
-    );
-  });
+function query(conn, sql, params) {
+  return new Promise((resolve, reject) =>
+    conn.query(sql, params, (err, res) => (err ? reject(err) : resolve(res)))
+  );
 }
 
 async function migrate(config) {
   const source = createConnection(config.source);
   const target = createConnection(config.target);
+  const id = config.idColumn;
+  const srcTable = config.sourceTable;
+  const dstTable = config.targetTable;
+  const isMssql = config.target?.type === "mssql";
 
-  const progress = loadProgress();
+  const [srcRes] = await query(source, `SELECT MIN(${id}) as min, MAX(${id}) as max FROM ${srcTable}`);
+  const [dstRes] = await query(target, `SELECT MAX(${id}) as max FROM ${dstTable}`);
 
-  // Get min/max ID
-  const { min, max } = await getMinMax(
-    source,
-    "employees", // change if needed
-    config.idColumn,
-  );
+  const srcMin = srcRes.min;
+  const srcMax = srcRes.max;
+  const dstMax = dstRes.max || 0;
+  const start = dstMax > 0 ? dstMax + 1 : srcMin;
 
-  const workers = config.workers || 1;
-  const rangeSize = Math.ceil((max - min) / workers);
-
-  console.log(`Total Range: ${min} → ${max}`);
-  console.log(`Workers: ${workers}`);
-  log(`Migration started — Range: ${min} → ${max}, Workers: ${workers}`);
-
-  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-  bar.start(max - min, 0);
-
-  let totalProcessed = 0;
-
-  const workerPromises = [];
-
-  for (let i = 0; i < workers; i++) {
-    const start = min + i * rangeSize;
-    const end = start + rangeSize;
-
-    workerPromises.push(
-      runWorker(i, start, end, source, target, config, progress, (count) => {
-        totalProcessed += count;
-        bar.update(totalProcessed);
-      }),
-    );
+  if (start > srcMax) {
+    console.log(`✅ No new records to migrate. (source max: ${srcMax}, destination max: ${dstMax})`);
+    return;
   }
 
-  await Promise.all(workerPromises);
+  console.log(`Migrating ${start} → ${srcMax} (${srcMax - start + 1} records)`);
+  log(`Migration started — ${start} → ${srcMax}`);
+
+  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+  bar.start(srcMax - start + 1, 0);
+
+  const workers = config.workers || 1;
+  const rangeSize = Math.ceil((srcMax - start + 1) / workers);
+
+  await Promise.all(Array.from({ length: workers }, (_, i) => {
+    const wStart = start + i * rangeSize;
+    const wEnd = i === workers - 1 ? srcMax : wStart + rangeSize - 1;
+    return runWorker(i, wStart, wEnd, source, target, config, isMssql, (n) => bar.increment(n));
+  }));
 
   bar.stop();
   log("✅ Migration completed");
   console.log("✅ Migration completed");
 }
 
-function runWorker(
-  workerId,
-  start,
-  end,
-  source,
-  target,
-  config,
-  progress,
-  onProgress,
-) {
+function runWorker(workerId, start, end, source, target, config, isMssql, onProgress) {
   return new Promise((resolve, reject) => {
-    let lastId = progress[workerId] || start;
-
-    const stream = source.query(config.query, [lastId, end]).stream();
-
-    let batch = [];
-    let processed = 0;
+    const stream = source.query(config.query, [start, end]).stream();
+    let batch = [], columns = null;
 
     stream
       .on("data", (row) => {
-        const transformed = transform(row);
-        batch.push(Object.values(transformed));
-        lastId = row[config.idColumn];
+        const t = transform(row);
+        if (!columns) columns = Object.keys(t);
+        batch.push(Object.values(t));
 
         if (batch.length >= config.batchSize) {
           stream.pause();
-          insertBatch(target, config.targetTable, batch, () => {
-            processed += batch.length;
-            onProgress(batch.length);
-            progress[workerId] = lastId;
-            saveProgress(progress);
-            log(`Worker ${workerId} — inserted batch, lastId: ${lastId}, total: ${processed}`);
+          insertBatch(target, config.targetTable, batch, columns, isMssql, (n) => {
+            onProgress(n);
+            log(`Worker ${workerId} — batch inserted up to id ${row[config.idColumn]}`);
             batch = [];
             stream.resume();
           });
@@ -194,30 +74,31 @@ function runWorker(
       })
       .on("end", () => {
         if (batch.length > 0) {
-          insertBatch(target, config.targetTable, batch, () => {
-            onProgress(batch.length);
-            progress[workerId] = lastId;
-            saveProgress(progress);
+          insertBatch(target, config.targetTable, batch, columns, isMssql, (n) => {
+            onProgress(n);
             resolve();
           });
         } else {
           resolve();
         }
       })
-      .on("error", (err) => {
-        error(`Worker ${workerId} error: ${err.message}`);
-        reject(err);
-      });
+      .on("error", (err) => { error(`Worker ${workerId}: ${err.message}`); reject(err); });
   });
 }
 
-function insertBatch(conn, table, rows, callback) {
-  if (!rows.length) return callback();
+function insertBatch(conn, table, rows, columns, isMssql, callback) {
+  if (!rows.length) return callback(0);
 
-  conn.query(`INSERT INTO ${table} VALUES ?`, [rows], (err) => {
-    if (err) error("Insert error: " + err.message);
-    callback();
-  });
+  if (isMssql) {
+    conn.bulkInsert(table, columns, rows)
+      .then(() => callback(rows.length))
+      .catch(err => { error("Insert error: " + err.message); callback(0); });
+  } else {
+    conn.query(`INSERT IGNORE INTO ${table} VALUES ?`, [rows], (err) => {
+      if (err) error("Insert error: " + err.message);
+      callback(rows.length);
+    });
+  }
 }
 
 module.exports = { migrate };

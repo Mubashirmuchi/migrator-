@@ -1,0 +1,26 @@
+{
+  "source": {
+    "type": "mssql",
+    "host": "localhost",
+    "port": 1433,
+    "user": "sa",
+    "password": "Admin@1234",
+    "database": "source_db",
+    "encrypt": false
+  },
+  "target": {
+    "type": "mssql",
+    "host": "localhost",
+    "port": 1434,
+    "user": "sa",
+    "password": "Admin@1234",
+    "database": "destination_db",
+    "encrypt": false
+  },
+  "query": "SELECT * FROM emp_view WHERE emp_no BETWEEN ? AND ?",
+  "sourceTable": "employees",
+  "targetTable": "final_table",
+  "batchSize": 50,
+  "idColumn": "emp_no",
+  "workers": 4
+}
